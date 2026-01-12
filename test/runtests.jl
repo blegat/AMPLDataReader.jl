@@ -32,6 +32,7 @@ function test_1d_array()
     data = parse_ampl_dat(lines)
     @test length(data["rho"]) >= 3
     @test data["rho"][1] ≈ 0.323232
+    @test eltype(data["rho"]) == Float64
     return
 end
 
@@ -51,6 +52,9 @@ function test_multi_column_table_1d()
     @test isa(data["rho"], Vector)
     @test isa(data["beta"], Vector)
     @test isa(data["alpha"], Vector)
+    @test eltype(data["rho"]) == Float64
+    @test eltype(data["beta"]) == Float64
+    @test eltype(data["alpha"]) == Float64
     @test length(data["rho"]) >= 3
     @test data["rho"][1] ≈ 0.323232
     return
@@ -73,6 +77,9 @@ function test_multi_column_table_2d()
     @test isa(data["C"], Matrix)
     @test isa(data["R"], Matrix)
     @test isa(data["polyX"], Matrix)
+    @test eltype(data["C"]) == Float64
+    @test eltype(data["R"]) == Float64
+    @test eltype(data["polyX"]) == Float64
     @test size(data["C"]) == (2, 2)
     @test size(data["R"]) == (2, 2)
     @test size(data["polyX"]) == (2, 2)
@@ -109,6 +116,13 @@ function test_example_file()
     @test isa(data["E"], Array)
     @test ndims(data["E"]) == 3
     @test isa(data["C"], Matrix)
+    @test eltype(data["rho"]) == Float64
+    @test eltype(data["beta"]) == Float64
+    @test eltype(data["alpha"]) == Float64
+    @test eltype(data["E"]) == Float64
+    @test eltype(data["C"]) == Float64
+    @test eltype(data["R"]) == Float64
+    @test eltype(data["polyX"]) == Float64
     return
 end
 
