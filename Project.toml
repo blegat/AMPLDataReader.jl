@@ -3,7 +3,15 @@ uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 version = "0.1.0"
 authors = ["Benoît Legat <benoit.legat@gmail.com>"]
 
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+
 [compat]
+DataFrames = "1.8.1"
+JuMP = "1.29.3"
+OrderedCollections = "1.8.1"
 julia = "1.6"
 
 [extras]

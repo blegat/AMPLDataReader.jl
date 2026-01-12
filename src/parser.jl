@@ -1,3 +1,7 @@
+import DataFrames
+import OrderedCollections
+import JuMP
+
 function _parse(s::AbstractString)
     s = strip(s)
     if s == "."
@@ -177,7 +181,10 @@ function parse_table_format(lines::Vector{String}, start_idx::Int, data::Dict{St
     # Determine format type
     if has_colon && !has_brackets
         # Format: param : col1 col2 ... :=
-        return parse_multi_column_table(lines, start_idx, data)
+        df_to_container!(
+            data,
+            parse_multi_column_table(lines, start_idx),
+        )
     elseif has_brackets
         # Format: param NAME [dims] : header :=
         return parse_indexed_table(lines, start_idx, data)
@@ -192,7 +199,7 @@ end
 Parse multi-column table format: param : col1 col2 ... := data ;
 For format like: param \n : rho beta alpha := \n 1 val1 val2 val3 \n ...
 """
-function parse_multi_column_table(lines::Vector{String}, start_idx::Int, data::Dict{String, Any})
+function parse_multi_column_table(lines::Vector{String}, start_idx::Int)
     i = start_idx
     line = strip(lines[i])
     
@@ -252,25 +259,14 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int, data::D
 
     # Move i to start of data (after header line)
     i += 1
-
-    # Initialize data structures
-    if num_indices == 2
-        # 2D arrays (matrices) - use Dict with (idx1, idx2) tuples
-        column_data = Dict{String, Dict{Tuple{Int, Int}, Union{Float64, Missing}}}()
-        for col in col_names
-            column_data[col] = Dict{Tuple{Int, Int}, Union{Float64, Missing}}()
-        end
-        max_idx1 = 0
-        max_idx2 = 0
-    else
-        # 1D arrays (vectors)
-        column_data = Dict{String, Vector{Union{Float64, Missing}}}()
-        for col in col_names
-            column_data[col] = Union{Float64, Missing}[]
-        end
+    cols = Any["index" => NTuple{num_indices,Int}[]]
+    for col in col_names
+        push!(cols, col => Union{Float64,Missing}[])
     end
 
-    # Parse data rows
+    df = DataFrames.DataFrame(cols)
+
+    # Fill up dataframe
     while i <= length(lines)
         line = strip(lines[i])
 
@@ -286,60 +282,68 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int, data::D
         end
         
         parts = split(line)
-        if num_indices == 2 && length(parts) >= num_cols + 2
-            # Two indices: s w val1 val2 ...
-            try
-                idx1 = parse(Int, parts[1])
-                idx2 = parse(Int, parts[2])
-                max_idx1 = max(max_idx1, idx1)
-                max_idx2 = max(max_idx2, idx2)
-                
-                # Store values for each column
-                for (col_idx, col_name) in enumerate(col_names)
-                    val_idx = 2 + col_idx  # Skip first two parts (indices)
-                    if val_idx <= length(parts)
-                        column_data[col_name][(idx1, idx2)] = _parse(parts[val_idx])
-                    end
-                end
-            catch
-                # Skip if parsing fails
-            end
-        elseif num_indices == 1 && length(parts) >= num_cols + 1
-            # Single index: idx val1 val2 ...
-            for (col_idx, col_name) in enumerate(col_names)
-                val_idx = 1 + col_idx  # Skip first part (index)
-                if val_idx <= length(parts)
-                    push!(column_data[col_name], _parse(parts[val_idx]))
-                end
-            end
-        end
+        vals = Any[ntuple(i -> parse(Int, parts[i]), num_indices)]
         
+        for (col_idx, col_name) in enumerate(col_names)
+            val_idx = num_indices + col_idx  # Skip first two parts (indices)
+            push!(vals, _parse(parts[val_idx]))
+        end
+
+        push!(df, vals)
+       
         i += 1
     end
-    
+
+    return df
+end
+
+function _range(bounds::NTuple{2,Int})
+    if bounds[1] == 1
+        return Base.OneTo(bounds[2])
+    else
+        return bounds[1]:bounds[2]
+    end
+end
+
+function _axes(indices::Vector{NTuple{N,Int}}) where N
+    return ntuple(Val(N)) do i
+        return _range(extrema(Base.Fix2(getindex, i), indices))
+    end
+end
+
+function _container(vals::Array{Float64}, ::NTuple{N,Base.OneTo{Int}}) where {N}
+    return vals
+end
+
+function _container(vals::Array{Float64}, ax)
+    return JuMP.Containers.DenseAxisArray(vals, ax...)
+end
+
+function df_to_container!(data::Dict{String, Any}, df::DataFrames.DataFrame)
+    df = sort(df, :index, by = reverse)
+    ax = _axes(df.index)
     # Store each column as a separate parameter
-    for (col_name, values) in column_data
-        if num_indices == 2
-            # Convert Dict to Matrix
-            if !isempty(values)
-                T = any(ismissing, Base.values(values)) ? Union{Float64, Missing} : Float64
-                result = Matrix{T}(undef, max_idx1, max_idx2)
-                fill!(result, NaN)
-                for ((idx1, idx2), val) in values
-                    result[idx1, idx2] = val
-                end
-                data[col_name] = result
-            end
-        else
-            # Store as vector
-            if !any(ismissing, Base.values(values))
-                values = convert(Vector{Float64}, values)
-            end
-            data[col_name] = values
+    for col in DataFrames.names(df)
+        if col == "index"
+            continue
         end
+        vals = df[!, col]
+        container = if any(ismissing, vals)
+            dict = OrderedCollections.OrderedDict{NTuple{length(ax),Int}, Float64}()
+            for i in axes(df, 1)
+                if !ismissing(vals[i])
+                    dict[df.index[i]] = vals[i]
+                end
+            end
+            JuMP.Containers.SparseAxisArray(dict)
+        else
+            vals = convert(Vector{Float64}, vals)
+            _container(reshape(vals, length.(ax)), ax)
+        end
+        data[col] = container
     end
     
-    return i
+    return
 end
 
 """
