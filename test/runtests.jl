@@ -118,11 +118,11 @@ function test_example_file()
     @test isa(data["C"], Matrix)
     @test eltype(data["rho"]) == Float64
     @test eltype(data["beta"]) == Float64
-    @test eltype(data["alpha"]) == Float64
-    @test eltype(data["E"]) == Float64
-    @test eltype(data["C"]) == Float64
-    @test eltype(data["R"]) == Float64
-    @test eltype(data["polyX"]) == Float64
+    @test eltype(data["alpha"]) == Union{Float64, Missing}
+    @test eltype(data["E"]) == Union{Float64, Missing}
+    @test eltype(data["C"]) == Union{Float64, Missing}
+    @test eltype(data["R"]) == Union{Float64, Missing}
+    @test eltype(data["polyX"]) == Union{Float64, Missing}
     return
 end
 
