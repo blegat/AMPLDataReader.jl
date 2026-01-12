@@ -1,14 +1,28 @@
-using AMPLData
-using Test
+module TestAMPLData
 
-@testset "AMPLData.jl" begin
-    # Test scalar parameters
+using Test
+using AMPLData
+
+function runtests()
+    for name in names(@__MODULE__; all = true)
+        if startswith("$(name)", "test_")
+            @testset "$(name)" begin
+                getfield(@__MODULE__, name)()
+            end
+        end
+    end
+    return
+end
+
+function test_scalar_parameters()
     lines = ["param S := 5;", "param W := 4;"]
     data = parse_ampl_dat(lines)
     @test data["S"] == 5
     @test data["W"] == 4
-    
-    # Test 1D array
+    return
+end
+
+function test_1d_array()
     lines = [
         "param rho := ",
         "1 0.323232",
@@ -18,8 +32,10 @@ using Test
     data = parse_ampl_dat(lines)
     @test length(data["rho"]) >= 3
     @test data["rho"][1] ≈ 0.323232
-    
-    # Test multi-column table with 1 index (1D arrays)
+    return
+end
+
+function test_multi_column_table_1d()
     lines = [
         "param ",
         ":      rho       beta   alpha    := ",
@@ -37,8 +53,10 @@ using Test
     @test isa(data["alpha"], Vector)
     @test length(data["rho"]) >= 3
     @test data["rho"][1] ≈ 0.323232
-    
-    # Test multi-column table with 2 indices (2D matrices)
+    return
+end
+
+function test_multi_column_table_2d()
     lines = [
         "param ",
         ":        C          R        polyX       := ",
@@ -66,8 +84,10 @@ using Test
     @test data["R"][1, 2] ≈ 135.362834
     @test data["R"][2, 1] ≈ 130.3699
     @test data["R"][2, 2] ≈ 155.100142
-    
-    # Test loading example1.dat file
+    return
+end
+
+function test_example_file()
     example_file = joinpath(@__DIR__, "..", "examples", "example1.dat")
     data = read_ampl_dat(example_file)
     @test haskey(data, "S")
@@ -89,6 +109,9 @@ using Test
     @test isa(data["E"], Array)
     @test ndims(data["E"]) == 3
     @test isa(data["C"], Matrix)
-    
-    println("All tests passed!")
+    return
 end
+
+end  # module
+
+TestAMPLData.runtests()
