@@ -75,7 +75,7 @@ function parse_ampl_dat(lines::Vector{String})
         if m !== nothing
             name = m.captures[1]
             i += 1  # Move to next line
-            arr_data = Dict{Int, Any}()
+            arr_data = Dict{Int, Float64}()
             while i <= length(lines)
                 line = strip(lines[i])
                 if line == ";" || isempty(line)
@@ -90,9 +90,9 @@ function parse_ampl_dat(lines::Vector{String})
                     val_str = parts[2]
                     if val_str != "." && val_str != ""
                         try
-                            arr_data[idx] = occursin(".", val_str) ? parse(Float64, val_str) : parse(Int, val_str)
+                            arr_data[idx] = occursin(".", val_str) ? parse(Float64, val_str) : Float64(parse(Int, val_str))
                         catch
-                            arr_data[idx] = val_str
+                            arr_data[idx] = NaN
                         end
                     end
                 end
@@ -101,7 +101,8 @@ function parse_ampl_dat(lines::Vector{String})
             # Convert to vector
             if !isempty(arr_data)
                 max_idx = maximum(keys(arr_data))
-                result = Vector{Any}(undef, max_idx)
+                result = Vector{Float64}(undef, max_idx)
+                fill!(result, NaN)
                 for (idx, val) in arr_data
                     result[idx] = val
                 end
@@ -117,7 +118,7 @@ function parse_ampl_dat(lines::Vector{String})
             values_str = strip(m.captures[2])
             # Parse space-separated values
             values = split(values_str)
-            parsed_values = Any[]
+            parsed_values = Float64[]
             for v in values
                 v = strip(v)
                 if !isempty(v)
@@ -125,10 +126,10 @@ function parse_ampl_dat(lines::Vector{String})
                         if occursin(".", v)
                             push!(parsed_values, parse(Float64, v))
                         else
-                            push!(parsed_values, parse(Int, v))
+                            push!(parsed_values, Float64(parse(Int, v)))
                         end
                     catch
-                        push!(parsed_values, v)  # Keep as string
+                        push!(parsed_values, NaN)  # Use NaN for non-numeric values
                     end
                 end
             end
@@ -276,17 +277,17 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int, data::D
     # Initialize data structures
     if num_indices == 2
         # 2D arrays (matrices) - use Dict with (idx1, idx2) tuples
-        column_data = Dict{String, Dict{Tuple{Int, Int}, Any}}()
+        column_data = Dict{String, Dict{Tuple{Int, Int}, Float64}}()
         for col in col_names
-            column_data[col] = Dict{Tuple{Int, Int}, Any}()
+            column_data[col] = Dict{Tuple{Int, Int}, Float64}()
         end
         max_idx1 = 0
         max_idx2 = 0
     else
         # 1D arrays (vectors)
-        column_data = Dict{String, Vector{Any}}()
+        column_data = Dict{String, Vector{Float64}}()
         for col in col_names
-            column_data[col] = Any[]
+            column_data[col] = Float64[]
         end
     end
 
@@ -321,11 +322,13 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int, data::D
                         val_str = parts[val_idx]
                         if val_str != "." && val_str != ""
                             try
-                                val = occursin(".", val_str) ? parse(Float64, val_str) : parse(Int, val_str)
+                                val = occursin(".", val_str) ? parse(Float64, val_str) : Float64(parse(Int, val_str))
                                 column_data[col_name][(idx1, idx2)] = val
                             catch
-                                column_data[col_name][(idx1, idx2)] = val_str
+                                column_data[col_name][(idx1, idx2)] = NaN
                             end
+                        else
+                            column_data[col_name][(idx1, idx2)] = NaN
                         end
                     end
                 end
@@ -343,13 +346,13 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int, data::D
                             if occursin(".", val_str)
                                 push!(column_data[col_name], parse(Float64, val_str))
                             else
-                                push!(column_data[col_name], parse(Int, val_str))
+                                push!(column_data[col_name], Float64(parse(Int, val_str)))
                             end
                         catch
-                            push!(column_data[col_name], val_str)
+                            push!(column_data[col_name], NaN)  # Use NaN for non-numeric values
                         end
                     else
-                        push!(column_data[col_name], 0.0)  # Use 0.0 for missing values
+                        push!(column_data[col_name], NaN)  # Use NaN for missing values
                     end
                 end
             end
@@ -363,8 +366,8 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int, data::D
         if num_indices == 2
             # Convert Dict to Matrix
             if !isempty(values)
-                result = Matrix{Any}(undef, max_idx1, max_idx2)
-                fill!(result, nothing)
+                result = Matrix{Float64}(undef, max_idx1, max_idx2)
+                fill!(result, NaN)
                 for ((idx1, idx2), val) in values
                     result[idx1, idx2] = val
                 end
@@ -437,7 +440,7 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
     # Initialize storage based on dimensions
     if num_dims == 1
         # 1D array: simple list
-        arr_data = Dict{Int, Any}()
+        arr_data = Dict{Int, Float64}()
         while i <= length(lines)
             line = strip(lines[i])
             if line == ";" || isempty(line)
@@ -450,9 +453,9 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
                 val_str = parts[2]
                 if val_str != "." && val_str != ""
                     try
-                        arr_data[idx] = occursin(".", val_str) ? parse(Float64, val_str) : parse(Int, val_str)
+                        arr_data[idx] = occursin(".", val_str) ? parse(Float64, val_str) : Float64(parse(Int, val_str))
                     catch
-                        arr_data[idx] = val_str
+                        arr_data[idx] = NaN
                     end
                 end
             end
@@ -461,7 +464,8 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
         # Convert to vector
         if !isempty(arr_data)
             max_idx = maximum(keys(arr_data))
-            result = Vector{Any}(undef, max_idx)
+            result = Vector{Float64}(undef, max_idx)
+            fill!(result, NaN)
             for (idx, val) in arr_data
                 result[idx] = val
             end
@@ -470,7 +474,7 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
         return i
     elseif num_dims == 2
         # 2D array: table format
-        arr_data = Dict{Tuple{Int, Int}, Any}()
+        arr_data = Dict{Tuple{Int, Int}, Float64}()
         while i <= length(lines)
             line = strip(lines[i])
             if line == ";" || isempty(line)
@@ -489,10 +493,12 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
                 val_str = parts[3]
                 if val_str != "." && val_str != ""
                     try
-                        arr_data[(idx1, idx2)] = occursin(".", val_str) ? parse(Float64, val_str) : parse(Int, val_str)
+                        arr_data[(idx1, idx2)] = occursin(".", val_str) ? parse(Float64, val_str) : Float64(parse(Int, val_str))
                     catch
-                        arr_data[(idx1, idx2)] = val_str
+                        arr_data[(idx1, idx2)] = NaN
                     end
+                else
+                    arr_data[(idx1, idx2)] = NaN
                 end
             end
             i += 1
@@ -501,7 +507,8 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
         if !isempty(arr_data)
             max_idx1 = maximum([k[1] for k in keys(arr_data)])
             max_idx2 = maximum([k[2] for k in keys(arr_data)])
-            result = Matrix{Any}(undef, max_idx1, max_idx2)
+            result = Matrix{Float64}(undef, max_idx1, max_idx2)
+            fill!(result, NaN)
             for ((idx1, idx2), val) in arr_data
                 result[idx1, idx2] = val
             end
@@ -527,7 +534,7 @@ function parse_multi_dimensional_array(
     num_dims::Int
 )
     i = start_idx
-    arr_data = Dict{Vector{Int}, Any}()
+    arr_data = Dict{Vector{Int}, Float64}()
     current_slice_indices = Dict{Int, Int}()  # Track which slice we're in for each dimension
     
     # Determine dimension sizes by parsing all data first
@@ -579,7 +586,7 @@ function parse_multi_dimensional_array(
                 for (w_idx, val_str) in enumerate(parts[2:end])
                     if val_str != "." && val_str != ""
                         try
-                            val = occursin(".", val_str) ? parse(Float64, val_str) : parse(Int, val_str)
+                            val = occursin(".", val_str) ? parse(Float64, val_str) : Float64(parse(Int, val_str))
                             # For 3D: E[s, w, h]
                             indices = [idx1, w_idx, h_idx]
                             arr_data[indices] = val
@@ -605,9 +612,9 @@ function parse_multi_dimensional_array(
             dim1 = max(1, dim_sizes[1])
             dim2 = max(1, dim_sizes[2])
             dim3 = max(1, dim_sizes[3])
-            result = Array{Any}(undef, dim1, dim2, dim3)
-            # Initialize with nothing
-            fill!(result, nothing)
+            result = Array{Float64}(undef, dim1, dim2, dim3)
+            # Initialize with NaN
+            fill!(result, NaN)
             for (indices, val) in arr_data
                 if length(indices) == 3
                     result[indices[1], indices[2], indices[3]] = val
