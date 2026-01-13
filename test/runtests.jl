@@ -129,4 +129,4 @@ end
 
 end  # module
 
-TestAMPLData.runtests()
+TestAMPLDataReader.runtests()
