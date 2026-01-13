@@ -1,4 +1,4 @@
-# AMPLData.jl
+# AMPLDataReader.jl
 
 > [!WARNING]
 > This package is still in early development and we are interested by examples of `.dat`
@@ -16,7 +16,7 @@ Pkg.add(url="https://github.com/blegat/AMPLDataReader.jl")
 ## Usage
 
 ```julia
-using AMPLData
+using AMPLDataReader
 
 # Parse an AMPL .dat file
 data = read_ampl_dat("model.dat")

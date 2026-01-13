@@ -6,7 +6,7 @@ A Julia package for parsing AMPL .dat files into Julia data structures.
 # Example
 
 ```julia
-using AMPLData
+using AMPLDataReader
 
 # Parse an AMPL .dat file
 data = read_ampl_dat("model.dat")
@@ -26,7 +26,7 @@ E = data["E"]  # Multi-dimensional array
 - Sets: `set N := 1 2 3;`
 - Tables with multiple columns: `param : C R := ...`
 """
-module AMPLData
+module AMPLDataReader
 
 export read_ampl_dat, parse_ampl_dat
 

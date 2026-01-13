@@ -1,4 +1,4 @@
-module TestAMPLData
+module TestAMPLDataReader
 
 using Test
 import JuMP
