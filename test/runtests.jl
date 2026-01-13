@@ -1,6 +1,7 @@
 module TestAMPLData
 
 using Test
+import JuMP
 using AMPLData
 
 function runtests()
@@ -115,14 +116,14 @@ function test_example_file()
     @test isa(data["rho"], Vector)
     @test isa(data["E"], Array)
     @test ndims(data["E"]) == 3
-    @test isa(data["C"], Matrix)
+    @test isa(data["C"], JuMP.Containers.SparseAxisArray{Float64,2,NTuple{2,Int}})
     @test eltype(data["rho"]) == Float64
     @test eltype(data["beta"]) == Float64
-    @test eltype(data["alpha"]) == Union{Float64, Missing}
+    @test isa(data["alpha"], JuMP.Containers.SparseAxisArray{Float64,1,Tuple{Int}})
     @test eltype(data["E"]) == Union{Float64, Missing}
-    @test eltype(data["C"]) == Union{Float64, Missing}
-    @test eltype(data["R"]) == Union{Float64, Missing}
-    @test eltype(data["polyX"]) == Union{Float64, Missing}
+    for k in ["C", "R", "polyX"]
+        @test isa(data[k], JuMP.Containers.SparseAxisArray{Float64,2,NTuple{2,Int}})
+    end
     return
 end
 
