@@ -19,7 +19,9 @@ function test_scalar_parameters()
     lines = ["param S := 5;", "param W := 4;"]
     data = parse_ampl_dat(lines)
     @test data["S"] == 5
+    @test data["S"] isa Int
     @test data["W"] == 4
+    @test data["W"] isa Int
     return
 end
 
