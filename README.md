@@ -1,5 +1,9 @@
 # AMPLData.jl
 
+> [!WARNING]
+> This package is still in early development and we are interested by examples of `.dat`
+> AMPL files that don't work yet so if you encounter any issue please let us know.
+
 A Julia package for parsing AMPL `.dat` files into JuMP containers.
 
 ## Installation
