@@ -67,7 +67,7 @@ function parse_ampl_dat(lines::Vector{String})
         m = match(r"param\s+(\w+)\s*:=\s*([^;]+);", line)
         if m !== nothing
             name = m.captures[1]
-            data[name] = _parse(m.captures[2])
+            data[name] = parse(Int, m.captures[2])
             i += 1
             continue
         end
