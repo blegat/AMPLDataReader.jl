@@ -1,8 +1,8 @@
-module TestAMPLData
+module TestAMPLDataReader
 
 using Test
 import JuMP
-using AMPLData
+using AMPLDataReader
 
 function runtests()
     for name in names(@__MODULE__; all = true)
@@ -129,4 +129,4 @@ end
 
 end  # module
 
-TestAMPLData.runtests()
+TestAMPLDataReader.runtests()
