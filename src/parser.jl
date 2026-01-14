@@ -2,13 +2,40 @@ import DataFrames
 import OrderedCollections
 import JuMP
 
-function _parse(s::AbstractString)
+function _parse(T::Type, s::AbstractString; allow_dot::Bool = false)
     s = strip(s)
-    if s == "."
+    if allow_dot && s == "."
         return missing
     else
-        return parse(Float64, s)
+        parse(T, s)
     end
+end
+
+# TODO remove
+_maybe_parse(T::Type, s::AbstractString) = _parse(T, s; allow_dot = true)
+_maybe_parse(s::AbstractString) = _maybe_parse(Float64, s)
+
+function _any_parse(s::AbstractString; allow_dot::Bool = false)
+    s = strip(s)
+    if allow_dot && s == "."
+        return missing
+    end
+    val = tryparse(Int, s)
+    if !isnothing(val)
+        return val
+    end
+    val = tryparse(Float64, s)
+    if !isnothing(val)
+        return val
+    end
+    return s
+end
+
+function _concrete_eltype(container)
+    if any(Base.Fix2(isa, AbstractString), container)
+        return String
+    end
+    return mapreduce(typeof, promote_type, container, init = Int)
 end
 
 """
@@ -39,6 +66,11 @@ function read_ampl_dat(filename::String)
     return parse_ampl_dat(lines)
 end
 
+function _convert_to_concrete_eltype(container::Vector)
+    T = _concrete_eltype(container)
+    return convert(Vector{T}, container)
+end
+
 """
     parse_ampl_dat(lines::Vector{String}) -> Dict{String, Any}
 
@@ -67,7 +99,7 @@ function parse_ampl_dat(lines::Vector{String})
         m = match(r"param\s+(\w+)\s*:=\s*([^;]+);", line)
         if m !== nothing
             name = m.captures[1]
-            data[name] = parse(Int, m.captures[2])
+            data[name] = _any_parse(m.captures[2])
             i += 1
             continue
         end
@@ -90,7 +122,7 @@ function parse_ampl_dat(lines::Vector{String})
                 parts = split(line)
                 if length(parts) >= 2
                     idx = parse(Int, parts[1])
-                    arr_data[idx] = _parse(parts[2])
+                    arr_data[idx] = _maybe_parse(parts[2])
                 end
                 i += 1
             end
@@ -114,14 +146,11 @@ function parse_ampl_dat(lines::Vector{String})
             values_str = strip(m.captures[2])
             # Parse space-separated values
             values = split(values_str)
-            parsed_values = Float64[]
+            parsed_values = []
             for v in values
-                v = strip(v)
-                if !isempty(v)
-                    push!(parsed_values, _parse(v))
-                end
+                push!(parsed_values, _any_parse(v))
             end
-            data[name] = parsed_values
+            data[name] = _convert_to_concrete_eltype(parsed_values)
             i += 1
             continue
         end
@@ -248,18 +277,25 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int)
 
     # Determine number of indices by checking first data line
     num_indices = 1
+    all_ints = true
     if !isempty(sample_line)
         parts = split(sample_line)
         # If we have more parts than columns, check if first two are integers
         num_indices = length(parts) - num_cols
         for i in 1:num_indices
-            parse(Int, parts[i])
+            all_ints = all_ints && !isnothing(tryparse(Int, parts[i]))
         end
     end
 
     # Move i to start of data (after header line)
     i += 1
-    cols = Any["index" => NTuple{num_indices,Int}[]]
+    if all_ints
+        IndexType = NTuple{num_indices,Int}
+    else
+        @assert num_indices == 1
+        IndexType = String
+    end
+    cols = Any["index" => IndexType[]]
     for col in col_names
         push!(cols, col => Union{Float64,Missing}[])
     end
@@ -282,11 +318,16 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int)
         end
         
         parts = split(line)
-        vals = Any[ntuple(i -> parse(Int, parts[i]), num_indices)]
+        index = if all_ints
+            ntuple(i -> parse(Int, parts[i]), num_indices)
+        else
+            parts[1]
+        end
+        vals = Any[index]
         
         for (col_idx, col_name) in enumerate(col_names)
             val_idx = num_indices + col_idx  # Skip first two parts (indices)
-            push!(vals, _parse(parts[val_idx]))
+            push!(vals, _maybe_parse(parts[val_idx]))
         end
 
         push!(df, vals)
@@ -414,7 +455,7 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
             parts = split(line)
             if length(parts) >= 2
                 idx = parse(Int, parts[1])
-                arr_data[idx] = _parse(parts[2])
+                arr_data[idx] = _maybe_parse(parts[2])
             end
             i += 1
         end
@@ -447,7 +488,7 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
             if length(parts) >= 3
                 idx1 = parse(Int, parts[1])
                 idx2 = parse(Int, parts[2])
-                arr_data[(idx1, idx2)] = _parse(parts[3])
+                arr_data[(idx1, idx2)] = _maybe_parse(parts[3])
             end
             i += 1
         end
@@ -534,7 +575,7 @@ function parse_multi_dimensional_array(
                 for (w_idx, val_str) in enumerate(parts[2:end])
                     # For 3D: E[s, w, h]
                     indices = [idx1, w_idx, h_idx]
-                    arr_data[indices] = _parse(val_str)
+                    arr_data[indices] = _maybe_parse(val_str)
                     dim_sizes[2] = max(dim_sizes[2], w_idx)
                 end
             catch
