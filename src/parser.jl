@@ -128,9 +128,20 @@ function _lines(element::AbstractString)
 end
 
 function parse_param(element::AbstractString)
-    if startswith(element, ":")
-        return parse_multi_column_table(strip(chop(element, head = 1, tail = 0)))
+    header, data = split(element, ":=")
+    if contains(header, "[")
+        return parse_indexed_table(element)
+    elseif contains(header, ":")
+        if startswith(header, ":")
+            # No name so we create a DataFrame and it will be one variable per column
+            header = strip(chop(header, head = 1, tail = 0))
+            return parse_dataframe(header, data)
+        else
+            name, header = split(header, ":")
+            return name, parse_dataframe(header, data)
+        end
     end
+
     lines = _lines(element)
 
     i = 1
@@ -177,63 +188,16 @@ function parse_param(element::AbstractString)
         return name, value
     end
 
-    
-    # Parse table format: param NAME [dims] : header := data ;
-    # or: param : col1 col2 ... := data ;
-    # or multi-line: param \n : col1 col2 ... := data ;
-    # Check if it's a table format (has : or [)
-    is_table = occursin(":", line) || occursin("[", line)
-    # Or check next line for continuation
-    if !is_table && i + 1 <= length(lines)
-        next_line = strip(lines[i + 1])
-        is_table = occursin(":", next_line) || occursin("[", next_line)
-    end
-    
-    if is_table
-        # TODO check in parse_table_format that i == length(lines)
-        return parse_table_format(lines, i)
-    end
     error("Cannot parse parameter:\"\n$element\"")
 end
 
 """
-    parse_table_format(lines, start_idx) -> Union{Int, Nothing}
-
-Parse AMPL table format parameters. Returns the new line index if successful, nothing otherwise.
-"""
-function parse_table_format(lines::Vector{<:AbstractString}, start_idx::Int)
-    i = start_idx
-    line = strip(lines[i])
-    
-    # Check for multi-line param declaration
-    # Format 1: param NAME [dims] : header := data ;
-    # Format 2: param : col1 col2 ... := data ;
-    
-    # Check if current line or next line has [ or : to determine format
-    has_brackets = occursin("[", line)
-    has_colon = occursin(":", line)
-    
-    # Determine format type
-    if has_colon && !has_brackets
-        # Format: param : col1 col2 ... :=
-        return parse_multi_column_table(lines, start_idx)
-    elseif has_brackets
-        # Format: param NAME [dims] : header :=
-        return parse_indexed_table(lines, start_idx)
-    end
-    
-    return nothing
-end
-
-"""
-    parse_multi_column_table(lines, start_idx, data) -> Union{Int, Nothing}
+    parse_dataframe(lines, start_idx, data) -> Union{Int, Nothing}
 
 Parse multi-column table format: param : col1 col2 ... := data ;
 For format like: param \n : rho beta alpha := \n 1 val1 val2 val3 \n ...
 """
-function parse_multi_column_table(element::AbstractString)
-    header_line, table = split(element, ":=")
-    
+function parse_dataframe(header_line::AbstractString, table::AbstractString)
     lines = _lines(table)
     col_names = split(strip(header_line))
     num_cols = length(col_names)
@@ -376,8 +340,9 @@ end
 Parse indexed table format: param NAME [dims] : header := data ;
 Handles 1D, 2D, 3D+ arrays.
 """
-function parse_indexed_table(lines::Vector{<:AbstractString}, start_idx::Int)
-    i = start_idx
+function parse_indexed_table(text::AbstractString)
+    lines = _lines(text)
+    i = 1
     line = strip(lines[i])
     
     # Extract parameter name and dimensions
