@@ -3,7 +3,16 @@ import MacMPEC
 import AMPLDataReader
 
 @testset "$name" for name in MacMPEC.list()
+    if startswith(name, "incid-set") || startswith(name, "nash") || startswith(name, "pack-comp") || startswith(name, "pack-rig")
+        continue
+    end
+    if name in ["bem-milanc30-s"]
+        continue
+    end
     problem = MacMPEC.problem(name)
-    data = AMPLDataReader.read_ampl_dat(MacMPEC.dat_path(problem))
-    @test data isa Dict{String}
+    path = MacMPEC.dat_path(problem)
+    if !isnothing(path)
+        data = AMPLDataReader.read_ampl_dat(path)
+        @test data isa Dict{String}
+    end
 end

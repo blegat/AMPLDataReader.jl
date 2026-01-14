@@ -86,6 +86,10 @@ function parse_ampl_dat(text::String)
     data = Dict{String, Any}()
     for element in split(text, ";")
         element = strip(element)
+        if startswith(element, "fix")
+            @warn("fix is not supported yet")
+            continue
+        end
         if !isempty(element)
             parsed = parse_element(element)
             if parsed isa DataFrames.DataFrame
@@ -104,19 +108,51 @@ function parse_element(element::AbstractString)
         i = findfirst(isequal('\n'), element)
         element = strip(chop(element, head = i, tail = 0))
     end
-    if startswith(element, "param")
-        parse_param(strip(chop(element, head = 5, tail = 0)))
-    elseif startswith(element, "set")
-        parse_set(strip(chop(element, head = 5, tail = 0)))
+    command, rest = strip.(split(element, limit = 2))
+    if _is_command(command, "param")
+        parse_param(rest)
+    elseif _is_command(command, "let")
+        # TODO what's the different with let ?
+        parse_param(rest)
+    elseif _is_command(command, "set")
+        parse_set(rest)
     else
-        error("Cannot parse element because it does not start with either param or set:\"\n$element\"")
+        error("Cannot parse element, unrecognized command $command in:\"\n$element\"")
     end
+end
+
+function _is_command(command::AbstractString, expected::AbstractString)
+    if startswith(command, expected)
+        if command != expected
+            @warn("Expected command $expected but got $command, interpreting as $expected")
+        end
+        return true
+    end
+    return false
 end
 
 function parse_set(element::AbstractString)
     name, values_str = strip.(split(element, ":="))
     # Parse space-separated values
-    parsed_values = _any_parse.(split(values_str))
+    if startswith(values_str, "(")
+        i = 1
+        sub = String[]
+        while i < length(values_str)
+            j = findfirst(isequal(')'), values_str[i:end])
+            j += i - 1
+            push!(sub, values_str[i:j])
+            i = findfirst(isequal('('), values_str[j:end])
+            if isnothing(i)
+                break
+            end
+            i += j - 1
+        end
+    elseif contains(values_str, ",")
+        sub = split(values_str, ',')
+    else
+        sub = split(values_str, " ")
+    end
+    parsed_values = _any_parse.(sub)
     value = _convert_to_concrete_eltype(parsed_values)
     return name, value
 end
@@ -128,7 +164,7 @@ function _lines(element::AbstractString)
 end
 
 function parse_param(element::AbstractString)
-    header, data = split(element, ":=")
+    header, data = strip.(split(element, ":=", limit = 2))
     if contains(header, "[")
         return parse_indexed_table(element)
     elseif contains(header, ":")
@@ -316,7 +352,8 @@ function df_to_container!(data::Dict{String, Any}, df::DataFrames.DataFrame)
             continue
         end
         vals = df[!, col]
-        container = if any(ismissing, vals)
+        sz = length.(ax)
+        container = if length(vals) < prod(sz) || any(ismissing, vals)
             dict = OrderedCollections.OrderedDict{NTuple{length(ax),Int}, Float64}()
             for i in axes(df, 1)
                 if !ismissing(vals[i])
@@ -326,7 +363,7 @@ function df_to_container!(data::Dict{String, Any}, df::DataFrames.DataFrame)
             JuMP.Containers.SparseAxisArray(dict)
         else
             vals = convert(Vector{Float64}, vals)
-            _container(reshape(vals, length.(ax)), ax)
+            _container(reshape(vals, sz), ax)
         end
         data[col] = container
     end
