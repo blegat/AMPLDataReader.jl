@@ -100,94 +100,100 @@ function parse_ampl_dat(text::String)
 end
 
 function parse_element(element::AbstractString)
-    lines = filter(map(strip, split(element, "\n"))) do line
+    while startswith(element, "#")
+        i = findfirst(isequal('\n'), element)
+        element = strip(chop(element, head = i, tail = 0))
+    end
+    if startswith(element, "param")
+        parse_param(strip(chop(element, head = 5, tail = 0)))
+    elseif startswith(element, "set")
+        parse_set(strip(chop(element, head = 5, tail = 0)))
+    else
+        error("Cannot parse element because it does not start with either param or set:\"\n$element\"")
+    end
+end
+
+function parse_set(element::AbstractString)
+    name, values_str = strip.(split(element, ":="))
+    # Parse space-separated values
+    parsed_values = _any_parse.(split(values_str))
+    value = _convert_to_concrete_eltype(parsed_values)
+    return name, value
+end
+
+function _lines(element::AbstractString)
+    return filter(map(strip, split(element, "\n"))) do line
         return !isempty(line) && !startswith(line, "#")
     end
+end
+
+function parse_param(element::AbstractString)
+    if startswith(element, ":")
+        return parse_multi_column_table(strip(chop(element, head = 1, tail = 0)))
+    end
+    lines = _lines(element)
 
     i = 1
+    line = lines[i]
     
-    name = value = nothing
-    while i <= length(lines)
-        line = lines[i]
-        
-        # Parse scalar parameter: param NAME := VALUE;
-        m = match(r"param\s+(\w+)\s*:=\s*([^;]+)", line)
-        if m !== nothing
-            @assert i == length(lines)
-            return m.captures[1], _any_parse(m.captures[2])
-        end
-        
-        # Parse 1D array: param NAME := INDEX1 VAL1 INDEX2 VAL2 ... ;
-        # or multi-line: param NAME := \n INDEX1 VAL1 \n INDEX2 VAL2 \n ... ;
-        m = match(r"param\s+(\w+)\s*:=\s*$", line)
-        if m !== nothing
-            name = m.captures[1]
-            i += 1  # Move to next line
-            arr_data = Dict{Int, Float64}()
-            while i <= length(lines)
-                line = strip(lines[i])
-                if line == ";" || isempty(line)
-                    i += 1
-                    break
-                end
-                # Remove trailing semicolon if present
-                line = replace(line, r";\s*$" => "")
-                parts = split(line)
-                if length(parts) >= 2
-                    idx = parse(Int, parts[1])
-                    arr_data[idx] = _maybe_parse(parts[2])
-                end
-                i += 1
-            end
-            # Convert to vector
-            @assert !isempty(arr_data)
-            max_idx = maximum(keys(arr_data))
-            value = Vector{Float64}(undef, max_idx)
-            fill!(value, NaN)
-            for (idx, val) in arr_data
-                value[idx] = val
-            end
-            @assert i == length(lines) + 1
-            return name, value
-        end
-        
-        # Parse set: set NAME := VALUES;
-        m = match(r"set\s+(\w+)\s*:=\s*([^;]+);", line)
-        if m !== nothing
-            name = m.captures[1]
-            values_str = strip(m.captures[2])
-            # Parse space-separated values
-            values = split(values_str)
-            parsed_values = []
-            for v in values
-                push!(parsed_values, _any_parse(v))
-            end
-            value = _convert_to_concrete_eltype(parsed_values)
-            @assert i == length(lines)
-            return name, value
-        end
-        
-        # Parse table format: param NAME [dims] : header := data ;
-        # or: param : col1 col2 ... := data ;
-        # or multi-line: param \n : col1 col2 ... := data ;
-        if occursin("param", line)
-            # Check if it's a table format (has : or [)
-            is_table = occursin(":", line) || occursin("[", line)
-            # Or check next line for continuation
-            if !is_table && i + 1 <= length(lines)
-                next_line = strip(lines[i + 1])
-                is_table = occursin(":", next_line) || occursin("[", next_line)
-            end
-            
-            if is_table
-                # TODO check in parse_table_format that i == length(lines)
-                return parse_table_format(lines, i)
-            end
-        end
-
-        i += 1
+    # Parse scalar parameter: param NAME := VALUE;
+    m = match(r"(\w+)\s*:=\s*([^;]+)", line)
+    if m !== nothing
+        @assert i == length(lines)
+        return m.captures[1], _any_parse(m.captures[2])
     end
-    error("Cannot parse element:\"\n$element\"")
+    
+    # Parse 1D array: param NAME := INDEX1 VAL1 INDEX2 VAL2 ... ;
+    # or multi-line: param NAME := \n INDEX1 VAL1 \n INDEX2 VAL2 \n ... ;
+    m = match(r"(\w+)\s*:=\s*$", line)
+    if m !== nothing
+        name = m.captures[1]
+        i += 1  # Move to next line
+        arr_data = Dict{Int, Float64}()
+        while i <= length(lines)
+            line = strip(lines[i])
+            if line == ";" || isempty(line)
+                i += 1
+                break
+            end
+            # Remove trailing semicolon if present
+            line = replace(line, r";\s*$" => "")
+            parts = split(line)
+            if length(parts) >= 2
+                idx = parse(Int, parts[1])
+                arr_data[idx] = _maybe_parse(parts[2])
+            end
+            i += 1
+        end
+        # Convert to vector
+        @assert !isempty(arr_data)
+        max_idx = maximum(keys(arr_data))
+        value = Vector{Float64}(undef, max_idx)
+        fill!(value, NaN)
+        for (idx, val) in arr_data
+            value[idx] = val
+        end
+        @assert i == length(lines) + 1
+        return name, value
+    end
+
+    
+    # Parse table format: param NAME [dims] : header := data ;
+    # or: param : col1 col2 ... := data ;
+    # or multi-line: param \n : col1 col2 ... := data ;
+    # Check if it's a table format (has : or [)
+    is_table = occursin(":", line) || occursin("[", line)
+    # Or check next line for continuation
+    if !is_table && i + 1 <= length(lines)
+        next_line = strip(lines[i + 1])
+        is_table = occursin(":", next_line) || occursin("[", next_line)
+    end
+    
+    if is_table
+        # TODO check in parse_table_format that i == length(lines)
+        return parse_table_format(lines, i)
+    end
+    error("Cannot parse parameter:\"\n$element\"")
 end
 
 """
@@ -207,14 +213,6 @@ function parse_table_format(lines::Vector{<:AbstractString}, start_idx::Int)
     has_brackets = occursin("[", line)
     has_colon = occursin(":", line)
     
-    # If current line is just "param" (possibly with trailing space), check next line
-    if (occursin(r"param\s*$", line) || (occursin("param", line) && !has_brackets && !has_colon)) && 
-       i + 1 <= length(lines)
-        next_line = strip(lines[i + 1])
-        has_brackets = occursin("[", next_line)
-        has_colon = occursin(":", next_line)
-    end
-    
     # Determine format type
     if has_colon && !has_brackets
         # Format: param : col1 col2 ... :=
@@ -233,40 +231,18 @@ end
 Parse multi-column table format: param : col1 col2 ... := data ;
 For format like: param \n : rho beta alpha := \n 1 val1 val2 val3 \n ...
 """
-function parse_multi_column_table(lines::Vector{<:AbstractString}, start_idx::Int)
-    i = start_idx
-    line = strip(lines[i])
+function parse_multi_column_table(element::AbstractString)
+    header_line, table = split(element, ":=")
     
-    # Find the header line with column names
-    header_line = ""
-    if occursin(r"param\s*$", line) || (occursin("param", line) && !occursin(":=", line) && !occursin(":", line))
-        if i + 1 <= length(lines)
-            header_line = strip(lines[i + 1])
-            i += 1
-        else
-            return nothing
-        end
-    else
-        header_line = line
-    end
-    
-    # Extract column names from header
-    # Format: : col1 col2 ... :=
-    m = match(r":\s*(.+?)\s*:=", header_line)
-    if m === nothing
-        return nothing
-    end
-    
-    col_names = split(strip(m.captures[1]))
+    lines = _lines(table)
+    col_names = split(strip(header_line))
     num_cols = length(col_names)
     
-    if num_cols == 0
-        return nothing
-    end
+    @assert num_cols > 0
     
     # Parse data rows to determine structure
     # First, scan to see if we have 1 or 2 indices
-    scan_i = i + 1
+    scan_i = 1
     sample_line = ""
     while scan_i <= length(lines)
         scan_line = strip(lines[scan_i])
@@ -293,7 +269,7 @@ function parse_multi_column_table(lines::Vector{<:AbstractString}, start_idx::In
     end
 
     # Move i to start of data (after header line)
-    i += 1
+    i = 1
     if all_ints
         IndexType = NTuple{num_indices,Int}
     else
@@ -356,6 +332,8 @@ function _axes(indices::Vector{NTuple{N,Int}}) where N
         return _range(extrema(Base.Fix2(getindex, i), indices))
     end
 end
+
+_axes(i::Vector{String}) = (i,)
 
 function _container(vals::Array{Float64}, ::NTuple{N,Base.OneTo{Int}}) where {N}
     return vals
@@ -425,7 +403,7 @@ function parse_indexed_table(lines::Vector{<:AbstractString}, start_idx::Int)
         end
     else
         # Try to match param NAME [dims] on same line
-        m = match(r"param\s+(\w+)\s+(\[.*?\])", line)
+        m = match(r"(\w+)\s+(\[.*?\])", line)
         if m !== nothing
             param_name = string(m.captures[1])
             dims_pattern = string(m.captures[2])

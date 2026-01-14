@@ -24,8 +24,27 @@ function test_scalar_parameters()
     return
 end
 
+function test_table()
+    text = """
+param 
+:        C          R       :=
+1    1    84.812151    120.964401
+1    2    100.553059    135.362834
+1    3    79.851577    115.524285
+1    4    102.740615    126.833369
+"""
+    data = parse_ampl_dat(text)
+    @test haskey(data, "C")
+    @test haskey(data, "R")
+    @test isa(data["C"], Matrix)
+    @test isa(data["R"], Matrix)
+    @test eltype(data["C"]) == Float64
+    @test eltype(data["R"]) == Float64
+    @test size(data["C"]) == (1, 4)
+    @test size(data["R"]) == (1, 4)
+end
+
 function test_1d_array()
-    s = 
     data = parse_ampl_dat("""
 param rho :=
 1 0.323232
