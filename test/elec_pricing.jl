@@ -1,4 +1,4 @@
-module TestAMPLDataReader
+module TestElecPricing
 
 using Test
 import JuMP
@@ -16,8 +16,7 @@ function runtests()
 end
 
 function test_scalar_parameters()
-    lines = ["param S := 5;", "param W := 4;"]
-    data = parse_ampl_dat(lines)
+    data = parse_ampl_dat("param S := 5; param W := 4;")
     @test data["S"] == 5
     @test data["S"] isa Int
     @test data["W"] == 4
@@ -26,13 +25,13 @@ function test_scalar_parameters()
 end
 
 function test_1d_array()
-    lines = [
-        "param rho := ",
-        "1 0.323232",
-        "2 0.161616",
-        "3 0.080808;"
-    ]
-    data = parse_ampl_dat(lines)
+    s = 
+    data = parse_ampl_dat("""
+param rho :=
+1 0.323232
+2 0.161616
+3 0.080808;
+    """)
     @test length(data["rho"]) >= 3
     @test data["rho"][1] ≈ 0.323232
     @test eltype(data["rho"]) == Float64
@@ -40,15 +39,13 @@ function test_1d_array()
 end
 
 function test_multi_column_table_1d()
-    lines = [
-        "param ",
-        ":      rho       beta   alpha    := ",
-        "1   0.323232    0.66667    0",
-        "2   0.161616    0.66667    0",
-        "3   0.080808    0.66667    0",
-        ";"
-    ]
-    data = parse_ampl_dat(lines)
+    data = parse_ampl_dat("""
+param
+:      rho       beta   alpha    :=
+1   0.323232    0.66667    0
+2   0.161616    0.66667    0
+3   0.080808    0.66667    0
+;""")
     @test haskey(data, "rho")
     @test haskey(data, "beta")
     @test haskey(data, "alpha")
@@ -64,16 +61,15 @@ function test_multi_column_table_1d()
 end
 
 function test_multi_column_table_2d()
-    lines = [
-        "param ",
-        ":        C          R        polyX       := ",
-        "1 1    80.2636   120.964401    1.945917",
-        "1 2    94.0192   135.362834    1.039845",
-        "2 1    78.77673   130.3699    1.840248",
-        "2 2    100.944157   155.100142    0.987113",
-        ";"
-    ]
-    data = parse_ampl_dat(lines)
+    data = parse_ampl_dat("""
+param
+:        C          R        polyX       :=
+1 1    80.2636   120.964401    1.945917
+1 2    94.0192   135.362834    1.039845
+2 1    78.77673   130.3699    1.840248
+2 2    100.944157   155.100142    0.987113
+;
+""")
     @test haskey(data, "C")
     @test haskey(data, "R")
     @test haskey(data, "polyX")
@@ -131,4 +127,4 @@ end
 
 end  # module
 
-TestAMPLDataReader.runtests()
+TestElecPricing.runtests()

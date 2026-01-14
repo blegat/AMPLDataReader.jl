@@ -62,8 +62,8 @@ E = data["E"]  # 3D array
 ```
 """
 function read_ampl_dat(filename::String)
-    lines = readlines(filename)
-    return parse_ampl_dat(lines)
+    s = read(filename, String)
+    return parse_ampl_dat(s)
 end
 
 function _convert_to_concrete_eltype(container::Vector)
@@ -72,36 +72,49 @@ function _convert_to_concrete_eltype(container::Vector)
 end
 
 """
-    parse_ampl_dat(lines::Vector{String}) -> Dict{String, Any}
+    parse_ampl_dat(text::String) -> Dict{String, Any}
 
 Parse AMPL .dat file content from a vector of lines.
 
 # Arguments
-- `lines::Vector{String}`: Lines from the AMPL .dat file
+- `text::String`: Text from the AMPL .dat file
 
 # Returns
 - `Dict{String, Any}`: Dictionary mapping parameter names to values
 """
-function parse_ampl_dat(lines::Vector{String})
+function parse_ampl_dat(text::String)
     data = Dict{String, Any}()
+    for element in split(text, ";")
+        element = strip(element)
+        if !isempty(element)
+            parsed = parse_element(element)
+            if parsed isa DataFrames.DataFrame
+                df_to_container!(data, parsed)
+            else
+                name, value = parsed
+                data[name] = value
+            end
+        end
+    end
+    return data
+end
+
+function parse_element(element::AbstractString)
+    lines = filter(map(strip, split(element, "\n"))) do line
+        return !isempty(line) && !startswith(line, "#")
+    end
+
     i = 1
     
+    name = value = nothing
     while i <= length(lines)
-        line = strip(lines[i])
-        
-        # Skip empty lines and comments
-        if isempty(line) || startswith(line, "#")
-            i += 1
-            continue
-        end
+        line = lines[i]
         
         # Parse scalar parameter: param NAME := VALUE;
-        m = match(r"param\s+(\w+)\s*:=\s*([^;]+);", line)
+        m = match(r"param\s+(\w+)\s*:=\s*([^;]+)", line)
         if m !== nothing
-            name = m.captures[1]
-            data[name] = _any_parse(m.captures[2])
-            i += 1
-            continue
+            @assert i == length(lines)
+            return m.captures[1], _any_parse(m.captures[2])
         end
         
         # Parse 1D array: param NAME := INDEX1 VAL1 INDEX2 VAL2 ... ;
@@ -127,16 +140,15 @@ function parse_ampl_dat(lines::Vector{String})
                 i += 1
             end
             # Convert to vector
-            if !isempty(arr_data)
-                max_idx = maximum(keys(arr_data))
-                result = Vector{Float64}(undef, max_idx)
-                fill!(result, NaN)
-                for (idx, val) in arr_data
-                    result[idx] = val
-                end
-                data[name] = result
+            @assert !isempty(arr_data)
+            max_idx = maximum(keys(arr_data))
+            value = Vector{Float64}(undef, max_idx)
+            fill!(value, NaN)
+            for (idx, val) in arr_data
+                value[idx] = val
             end
-            continue
+            @assert i == length(lines) + 1
+            return name, value
         end
         
         # Parse set: set NAME := VALUES;
@@ -150,9 +162,9 @@ function parse_ampl_dat(lines::Vector{String})
             for v in values
                 push!(parsed_values, _any_parse(v))
             end
-            data[name] = _convert_to_concrete_eltype(parsed_values)
-            i += 1
-            continue
+            value = _convert_to_concrete_eltype(parsed_values)
+            @assert i == length(lines)
+            return name, value
         end
         
         # Parse table format: param NAME [dims] : header := data ;
@@ -168,26 +180,22 @@ function parse_ampl_dat(lines::Vector{String})
             end
             
             if is_table
-                result = parse_table_format(lines, i, data)
-                if result !== nothing
-                    i = result
-                    continue
-                end
+                # TODO check in parse_table_format that i == length(lines)
+                return parse_table_format(lines, i)
             end
         end
-        
+
         i += 1
     end
-    
-    return data
+    error("Cannot parse element:\"\n$element\"")
 end
 
 """
-    parse_table_format(lines, start_idx, data) -> Union{Int, Nothing}
+    parse_table_format(lines, start_idx) -> Union{Int, Nothing}
 
 Parse AMPL table format parameters. Returns the new line index if successful, nothing otherwise.
 """
-function parse_table_format(lines::Vector{String}, start_idx::Int, data::Dict{String, Any})
+function parse_table_format(lines::Vector{<:AbstractString}, start_idx::Int)
     i = start_idx
     line = strip(lines[i])
     
@@ -210,13 +218,10 @@ function parse_table_format(lines::Vector{String}, start_idx::Int, data::Dict{St
     # Determine format type
     if has_colon && !has_brackets
         # Format: param : col1 col2 ... :=
-        df_to_container!(
-            data,
-            parse_multi_column_table(lines, start_idx),
-        )
+        return parse_multi_column_table(lines, start_idx)
     elseif has_brackets
         # Format: param NAME [dims] : header :=
-        return parse_indexed_table(lines, start_idx, data)
+        return parse_indexed_table(lines, start_idx)
     end
     
     return nothing
@@ -228,7 +233,7 @@ end
 Parse multi-column table format: param : col1 col2 ... := data ;
 For format like: param \n : rho beta alpha := \n 1 val1 val2 val3 \n ...
 """
-function parse_multi_column_table(lines::Vector{String}, start_idx::Int)
+function parse_multi_column_table(lines::Vector{<:AbstractString}, start_idx::Int)
     i = start_idx
     line = strip(lines[i])
     
@@ -393,7 +398,7 @@ end
 Parse indexed table format: param NAME [dims] : header := data ;
 Handles 1D, 2D, 3D+ arrays.
 """
-function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{String, Any})
+function parse_indexed_table(lines::Vector{<:AbstractString}, start_idx::Int)
     i = start_idx
     line = strip(lines[i])
     
@@ -460,16 +465,14 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
             i += 1
         end
         # Convert to vector
-        if !isempty(arr_data)
-            max_idx = maximum(keys(arr_data))
-            result = Vector{Float64}(undef, max_idx)
-            fill!(result, NaN)
-            for (idx, val) in arr_data
-                result[idx] = val
-            end
-            data[param_name] = result
+        @assert !isempty(arr_data)
+        max_idx = maximum(keys(arr_data))
+        result = Vector{Float64}(undef, max_idx)
+        fill!(result, NaN)
+        for (idx, val) in arr_data
+            result[idx] = val
         end
-        return i
+        return param_name, result
     elseif num_dims == 2
         # 2D array: table format
         arr_data = Dict{Tuple{Int, Int}, Union{Float64, Missing}}()
@@ -493,33 +496,29 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
             i += 1
         end
         # Convert to 2D array
-        if !isempty(arr_data)
-            max_idx1 = maximum([k[1] for k in keys(arr_data)])
-            max_idx2 = maximum([k[2] for k in keys(arr_data)])
-            result = Matrix{Union{Float64, Missing}}(undef, max_idx1, max_idx2)
-            fill!(result, NaN)
-            for ((idx1, idx2), val) in arr_data
-                result[idx1, idx2] = val
-            end
-            data[param_name] = result
+        @assert !isempty(arr_data)
+        max_idx1 = maximum([k[1] for k in keys(arr_data)])
+        max_idx2 = maximum([k[2] for k in keys(arr_data)])
+        result = Matrix{Union{Float64, Missing}}(undef, max_idx1, max_idx2)
+        fill!(result, NaN)
+        for ((idx1, idx2), val) in arr_data
+            result[idx1, idx2] = val
         end
-        return i
+        return param_name, result
     else
         # 3D+ array: handle slice-by-slice
-        return parse_multi_dimensional_array(lines, i, data, param_name, num_dims)
+        return param_name, parse_multi_dimensional_array(lines, i, num_dims)
     end
 end
 
 """
-    parse_multi_dimensional_array(lines, start_idx, data, param_name, num_dims) -> Int
+    parse_multi_dimensional_array(lines, start_idx, param_name, num_dims) -> Int
 
 Parse multi-dimensional arrays (3D+) that are stored slice-by-slice in AMPL format.
 """
 function parse_multi_dimensional_array(
-    lines::Vector{String}, 
+    lines::Vector{<:AbstractString}, 
     start_idx::Int, 
-    data::Dict{String, Any}, 
-    param_name::String,
     num_dims::Int
 )
     i = start_idx
@@ -602,12 +601,12 @@ function parse_multi_dimensional_array(
                     result[indices[1], indices[2], indices[3]] = val
                 end
             end
-            data[param_name] = result
         else
             # For 4D+, store as nested structure or use a more complex representation
             # For now, store as Dict mapping indices to values
-            data[param_name] = arr_data
+            result = arr_data
         end
+        return result
     end
     
     return i
