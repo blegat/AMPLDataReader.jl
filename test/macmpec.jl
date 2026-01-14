@@ -6,6 +6,9 @@ import AMPLDataReader
     if startswith(name, "incid-set") || startswith(name, "nash") || startswith(name, "pack-comp") || startswith(name, "pack-rig")
         continue
     end
+    if startswith(name, "flp4")
+        break
+    end
     if name in ["bem-milanc30-s"]
         continue
     end

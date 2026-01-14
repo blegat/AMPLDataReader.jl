@@ -108,27 +108,25 @@ function parse_element(element::AbstractString)
         i = findfirst(isequal('\n'), element)
         element = strip(chop(element, head = i, tail = 0))
     end
-    command, rest = strip.(split(element, limit = 2))
-    if _is_command(command, "param")
+    command, rest = _get_command(element, ["param", "let", "set"])
+    if command == "param"
         parse_param(rest)
-    elseif _is_command(command, "let")
+    elseif command == "let"
         # TODO what's the different with let ?
         parse_param(rest)
-    elseif _is_command(command, "set")
-        parse_set(rest)
     else
-        error("Cannot parse element, unrecognized command $command in:\"\n$element\"")
+        @assert command == "set"
+        parse_set(rest)
     end
 end
 
-function _is_command(command::AbstractString, expected::AbstractString)
-    if startswith(command, expected)
-        if command != expected
-            @warn("Expected command $expected but got $command, interpreting as $expected")
+function _get_command(s::AbstractString, expected::Vector{String})
+    for command in expected
+        if startswith(s, command)
+            return command, chop(s, head = length(command), tail = 0)
         end
-        return true
     end
-    return false
+    error("Cannot parse element, does not start with any of the commands $expected in:\"\n$s\"")
 end
 
 function parse_set(element::AbstractString)
