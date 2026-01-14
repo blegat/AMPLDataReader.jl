@@ -28,8 +28,11 @@ E = data["E"]  # Multi-dimensional array
 """
 module AMPLDataReader
 
+import OrderedCollections
+
 export read_ampl_dat, parse_ampl_dat
 
+include("model.jl")
 include("parser.jl")
 
 end # module

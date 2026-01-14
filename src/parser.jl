@@ -1,6 +1,4 @@
 import DataFrames
-import OrderedCollections
-import JuMP
 
 function _parse(T::Type, s::AbstractString; allow_dot::Bool = false)
     s = strip(s)
