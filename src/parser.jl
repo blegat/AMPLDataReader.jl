@@ -36,32 +36,9 @@ function _concrete_eltype(container)
     return mapreduce(typeof, promote_type, container, init = Int)
 end
 
-"""
-    read_ampl_dat(filename::String) -> Dict{String, Any}
-
-Read an AMPL .dat file and return a dictionary mapping parameter names to their values.
-
-# Arguments
-- `filename::String`: Path to the AMPL .dat file
-
-# Returns
-- `Dict{String, Any}`: Dictionary where keys are parameter names and values are:
-  - Scalars: Numbers (Int or Float64)
-  - 1D arrays: Vectors
-  - 2D+ arrays: Multi-dimensional arrays (as nested vectors or arrays)
-  - Sets: Vectors
-
-# Example
-```julia
-data = read_ampl_dat("model.dat")
-S = data["S"]  # Scalar
-rho = data["rho"]  # Vector
-E = data["E"]  # 3D array
-```
-"""
-function read_ampl_dat(filename::String)
+function read_ampl_dat(filename::String, model::Model)
     s = read(filename, String)
-    return parse_ampl_dat(s)
+    return parse_ampl_dat(s, model)
 end
 
 function _convert_to_concrete_eltype(container::Vector)
@@ -69,19 +46,8 @@ function _convert_to_concrete_eltype(container::Vector)
     return convert(Vector{T}, container)
 end
 
-"""
-    parse_ampl_dat(text::String) -> Dict{String, Any}
-
-Parse AMPL .dat file content from a vector of lines.
-
-# Arguments
-- `text::String`: Text from the AMPL .dat file
-
-# Returns
-- `Dict{String, Any}`: Dictionary mapping parameter names to values
-"""
-function parse_ampl_dat(text::String)
-    data = Dict{String, Any}()
+function parse_ampl_dat(text::String, model::Model)
+    data = OrderedCollections.OrderedDict{String, Any}()
     for element in split(text, ";")
         element = strip(element)
         if startswith(element, "fix")
@@ -89,7 +55,7 @@ function parse_ampl_dat(text::String)
             continue
         end
         if !isempty(element)
-            parsed = parse_element(element)
+            parsed = parse_element(element, model)
             if parsed isa DataFrames.DataFrame
                 df_to_container!(data, parsed)
             else
@@ -101,17 +67,17 @@ function parse_ampl_dat(text::String)
     return data
 end
 
-function parse_element(element::AbstractString)
+function parse_element(element::AbstractString, model::Model)
     while startswith(element, "#")
         i = findfirst(isequal('\n'), element)
         element = strip(chop(element, head = i, tail = 0))
     end
     command, rest = _get_command(element, ["param", "let", "set"])
     if command == "param"
-        parse_param(rest)
+        parse_param(rest, model)
     elseif command == "let"
-        # TODO what's the different with let ?
-        parse_param(rest)
+        # TODO what's the different with param ?
+        parse_param(rest, model)
     else
         @assert command == "set"
         parse_set(rest)
@@ -159,18 +125,18 @@ function _lines(element::AbstractString)
     end
 end
 
-function parse_param(element::AbstractString)
-    header, data = strip.(split(element, ":=", limit = 2))
+function parse_param(element::AbstractString, model::Model)
+    header, rows = strip.(split(element, ":=", limit = 2))
     if contains(header, "[")
         return parse_indexed_table(element)
     elseif contains(header, ":")
         if startswith(header, ":")
             # No name so we create a DataFrame and it will be one variable per column
             header = strip(chop(header, head = 1, tail = 0))
-            return parse_dataframe(header, data)
+            return parse_dataframe(header, rows, model)
         else
             name, header = split(header, ":")
-            return name, parse_dataframe(header, data)
+            return name, parse_dataframe(header, rows, model)
         end
     end
 
@@ -229,40 +195,26 @@ end
 Parse multi-column table format: param : col1 col2 ... := data ;
 For format like: param \n : rho beta alpha := \n 1 val1 val2 val3 \n ...
 """
-function parse_dataframe(header_line::AbstractString, table::AbstractString)
+function parse_dataframe(header_line::AbstractString, table::AbstractString, model::Model)
     lines = _lines(table)
     col_names = split(strip(header_line))
     num_cols = length(col_names)
     
     @assert num_cols > 0
     
-    # Parse data rows to determine structure
-    # First, scan to see if we have 1 or 2 indices
-    scan_i = 1
-    sample_line = ""
-    while scan_i <= length(lines)
-        scan_line = strip(lines[scan_i])
-        if scan_line == ";" || isempty(scan_line)
-            break
+    num_indices = nothing
+    for col_name in col_names
+        num = length(model.params[col_names].axes.axes)
+        if isnothing(num_indices)
+            num_indices = num
+        else
+            if num_indices != num
+                error("Cannot specify the values of $(col_names) together because the first one has $num_indices indices and $col_name has $num indices")
+            end
         end
-        if scan_line != ":" && !startswith(scan_line, ":")
-            sample_line = scan_line
-            break
-        end
-        scan_i += 1
     end
 
-    # Determine number of indices by checking first data line
-    num_indices = 1
-    all_ints = true
-    if !isempty(sample_line)
-        parts = split(sample_line)
-        # If we have more parts than columns, check if first two are integers
-        num_indices = length(parts) - num_cols
-        for i in 1:num_indices
-            all_ints = all_ints && !isnothing(tryparse(Int, parts[i]))
-        end
-    end
+    tokens = split(table)
 
     # Move i to start of data (after header line)
     i = 1
