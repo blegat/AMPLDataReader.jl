@@ -2,13 +2,40 @@ import DataFrames
 import OrderedCollections
 import JuMP
 
-function _parse(s::AbstractString)
+function _parse(T::Type, s::AbstractString; allow_dot::Bool = false)
     s = strip(s)
-    if s == "."
+    if allow_dot && s == "."
         return missing
     else
-        return parse(Float64, s)
+        parse(T, s)
     end
+end
+
+# TODO remove
+_maybe_parse(T::Type, s::AbstractString) = _parse(T, s; allow_dot = true)
+_maybe_parse(s::AbstractString) = _maybe_parse(Float64, s)
+
+function _any_parse(s::AbstractString; allow_dot::Bool = false)
+    s = strip(s)
+    if allow_dot && s == "."
+        return missing
+    end
+    val = tryparse(Int, s)
+    if !isnothing(val)
+        return val
+    end
+    val = tryparse(Float64, s)
+    if !isnothing(val)
+        return val
+    end
+    return s
+end
+
+function _concrete_eltype(container)
+    if any(Base.Fix2(isa, AbstractString), container)
+        return String
+    end
+    return mapreduce(typeof, promote_type, container, init = Int)
 end
 
 """
@@ -35,204 +62,185 @@ E = data["E"]  # 3D array
 ```
 """
 function read_ampl_dat(filename::String)
-    lines = readlines(filename)
-    return parse_ampl_dat(lines)
+    s = read(filename, String)
+    return parse_ampl_dat(s)
+end
+
+function _convert_to_concrete_eltype(container::Vector)
+    T = _concrete_eltype(container)
+    return convert(Vector{T}, container)
 end
 
 """
-    parse_ampl_dat(lines::Vector{String}) -> Dict{String, Any}
+    parse_ampl_dat(text::String) -> Dict{String, Any}
 
 Parse AMPL .dat file content from a vector of lines.
 
 # Arguments
-- `lines::Vector{String}`: Lines from the AMPL .dat file
+- `text::String`: Text from the AMPL .dat file
 
 # Returns
 - `Dict{String, Any}`: Dictionary mapping parameter names to values
 """
-function parse_ampl_dat(lines::Vector{String})
+function parse_ampl_dat(text::String)
     data = Dict{String, Any}()
-    i = 1
-    
-    while i <= length(lines)
-        line = strip(lines[i])
-        
-        # Skip empty lines and comments
-        if isempty(line) || startswith(line, "#")
-            i += 1
+    for element in split(text, ";")
+        element = strip(element)
+        if startswith(element, "fix")
+            @warn("fix is not supported yet")
             continue
         end
-        
-        # Parse scalar parameter: param NAME := VALUE;
-        m = match(r"param\s+(\w+)\s*:=\s*([^;]+);", line)
-        if m !== nothing
-            name = m.captures[1]
-            data[name] = parse(Int, m.captures[2])
-            i += 1
-            continue
-        end
-        
-        # Parse 1D array: param NAME := INDEX1 VAL1 INDEX2 VAL2 ... ;
-        # or multi-line: param NAME := \n INDEX1 VAL1 \n INDEX2 VAL2 \n ... ;
-        m = match(r"param\s+(\w+)\s*:=\s*$", line)
-        if m !== nothing
-            name = m.captures[1]
-            i += 1  # Move to next line
-            arr_data = Dict{Int, Float64}()
-            while i <= length(lines)
-                line = strip(lines[i])
-                if line == ";" || isempty(line)
-                    i += 1
-                    break
-                end
-                # Remove trailing semicolon if present
-                line = replace(line, r";\s*$" => "")
-                parts = split(line)
-                if length(parts) >= 2
-                    idx = parse(Int, parts[1])
-                    arr_data[idx] = _parse(parts[2])
-                end
-                i += 1
-            end
-            # Convert to vector
-            if !isempty(arr_data)
-                max_idx = maximum(keys(arr_data))
-                result = Vector{Float64}(undef, max_idx)
-                fill!(result, NaN)
-                for (idx, val) in arr_data
-                    result[idx] = val
-                end
-                data[name] = result
-            end
-            continue
-        end
-        
-        # Parse set: set NAME := VALUES;
-        m = match(r"set\s+(\w+)\s*:=\s*([^;]+);", line)
-        if m !== nothing
-            name = m.captures[1]
-            values_str = strip(m.captures[2])
-            # Parse space-separated values
-            values = split(values_str)
-            parsed_values = Float64[]
-            for v in values
-                v = strip(v)
-                if !isempty(v)
-                    push!(parsed_values, _parse(v))
-                end
-            end
-            data[name] = parsed_values
-            i += 1
-            continue
-        end
-        
-        # Parse table format: param NAME [dims] : header := data ;
-        # or: param : col1 col2 ... := data ;
-        # or multi-line: param \n : col1 col2 ... := data ;
-        if occursin("param", line)
-            # Check if it's a table format (has : or [)
-            is_table = occursin(":", line) || occursin("[", line)
-            # Or check next line for continuation
-            if !is_table && i + 1 <= length(lines)
-                next_line = strip(lines[i + 1])
-                is_table = occursin(":", next_line) || occursin("[", next_line)
-            end
-            
-            if is_table
-                result = parse_table_format(lines, i, data)
-                if result !== nothing
-                    i = result
-                    continue
-                end
+        if !isempty(element)
+            parsed = parse_element(element)
+            if parsed isa DataFrames.DataFrame
+                df_to_container!(data, parsed)
+            else
+                name, value = parsed
+                data[name] = value
             end
         end
-        
-        i += 1
     end
-    
     return data
 end
 
-"""
-    parse_table_format(lines, start_idx, data) -> Union{Int, Nothing}
+function parse_element(element::AbstractString)
+    while startswith(element, "#")
+        i = findfirst(isequal('\n'), element)
+        element = strip(chop(element, head = i, tail = 0))
+    end
+    command, rest = _get_command(element, ["param", "let", "set"])
+    if command == "param"
+        parse_param(rest)
+    elseif command == "let"
+        # TODO what's the different with let ?
+        parse_param(rest)
+    else
+        @assert command == "set"
+        parse_set(rest)
+    end
+end
 
-Parse AMPL table format parameters. Returns the new line index if successful, nothing otherwise.
-"""
-function parse_table_format(lines::Vector{String}, start_idx::Int, data::Dict{String, Any})
-    i = start_idx
-    line = strip(lines[i])
+function _get_command(s::AbstractString, expected::Vector{String})
+    for command in expected
+        if startswith(s, command)
+            return command, chop(s, head = length(command), tail = 0)
+        end
+    end
+    error("Cannot parse element, does not start with any of the commands $expected in:\"\n$s\"")
+end
+
+function parse_set(element::AbstractString)
+    name, values_str = strip.(split(element, ":="))
+    # Parse space-separated values
+    if startswith(values_str, "(")
+        i = 1
+        sub = String[]
+        while i < length(values_str)
+            j = findfirst(isequal(')'), values_str[i:end])
+            j += i - 1
+            push!(sub, values_str[i:j])
+            i = findfirst(isequal('('), values_str[j:end])
+            if isnothing(i)
+                break
+            end
+            i += j - 1
+        end
+    elseif contains(values_str, ",")
+        sub = split(values_str, ',')
+    else
+        sub = split(values_str, " ")
+    end
+    parsed_values = _any_parse.(sub)
+    value = _convert_to_concrete_eltype(parsed_values)
+    return name, value
+end
+
+function _lines(element::AbstractString)
+    return filter(map(strip, split(element, "\n"))) do line
+        return !isempty(line) && !startswith(line, "#")
+    end
+end
+
+function parse_param(element::AbstractString)
+    header, data = strip.(split(element, ":=", limit = 2))
+    if contains(header, "[")
+        return parse_indexed_table(element)
+    elseif contains(header, ":")
+        if startswith(header, ":")
+            # No name so we create a DataFrame and it will be one variable per column
+            header = strip(chop(header, head = 1, tail = 0))
+            return parse_dataframe(header, data)
+        else
+            name, header = split(header, ":")
+            return name, parse_dataframe(header, data)
+        end
+    end
+
+    lines = _lines(element)
+
+    i = 1
+    line = lines[i]
     
-    # Check for multi-line param declaration
-    # Format 1: param NAME [dims] : header := data ;
-    # Format 2: param : col1 col2 ... := data ;
-    
-    # Check if current line or next line has [ or : to determine format
-    has_brackets = occursin("[", line)
-    has_colon = occursin(":", line)
-    
-    # If current line is just "param" (possibly with trailing space), check next line
-    if (occursin(r"param\s*$", line) || (occursin("param", line) && !has_brackets && !has_colon)) && 
-       i + 1 <= length(lines)
-        next_line = strip(lines[i + 1])
-        has_brackets = occursin("[", next_line)
-        has_colon = occursin(":", next_line)
+    # Parse scalar parameter: param NAME := VALUE;
+    m = match(r"(\w+)\s*:=\s*([^;]+)", line)
+    if m !== nothing
+        @assert i == length(lines)
+        return m.captures[1], _any_parse(m.captures[2])
     end
     
-    # Determine format type
-    if has_colon && !has_brackets
-        # Format: param : col1 col2 ... :=
-        df_to_container!(
-            data,
-            parse_multi_column_table(lines, start_idx),
-        )
-    elseif has_brackets
-        # Format: param NAME [dims] : header :=
-        return parse_indexed_table(lines, start_idx, data)
+    # Parse 1D array: param NAME := INDEX1 VAL1 INDEX2 VAL2 ... ;
+    # or multi-line: param NAME := \n INDEX1 VAL1 \n INDEX2 VAL2 \n ... ;
+    m = match(r"(\w+)\s*:=\s*$", line)
+    if m !== nothing
+        name = m.captures[1]
+        i += 1  # Move to next line
+        arr_data = Dict{Int, Float64}()
+        while i <= length(lines)
+            line = strip(lines[i])
+            if line == ";" || isempty(line)
+                i += 1
+                break
+            end
+            # Remove trailing semicolon if present
+            line = replace(line, r";\s*$" => "")
+            parts = split(line)
+            if length(parts) >= 2
+                idx = parse(Int, parts[1])
+                arr_data[idx] = _maybe_parse(parts[2])
+            end
+            i += 1
+        end
+        # Convert to vector
+        @assert !isempty(arr_data)
+        max_idx = maximum(keys(arr_data))
+        value = Vector{Float64}(undef, max_idx)
+        fill!(value, NaN)
+        for (idx, val) in arr_data
+            value[idx] = val
+        end
+        @assert i == length(lines) + 1
+        return name, value
     end
-    
-    return nothing
+
+    error("Cannot parse parameter:\"\n$element\"")
 end
 
 """
-    parse_multi_column_table(lines, start_idx, data) -> Union{Int, Nothing}
+    parse_dataframe(lines, start_idx, data) -> Union{Int, Nothing}
 
 Parse multi-column table format: param : col1 col2 ... := data ;
 For format like: param \n : rho beta alpha := \n 1 val1 val2 val3 \n ...
 """
-function parse_multi_column_table(lines::Vector{String}, start_idx::Int)
-    i = start_idx
-    line = strip(lines[i])
-    
-    # Find the header line with column names
-    header_line = ""
-    if occursin(r"param\s*$", line) || (occursin("param", line) && !occursin(":=", line) && !occursin(":", line))
-        if i + 1 <= length(lines)
-            header_line = strip(lines[i + 1])
-            i += 1
-        else
-            return nothing
-        end
-    else
-        header_line = line
-    end
-    
-    # Extract column names from header
-    # Format: : col1 col2 ... :=
-    m = match(r":\s*(.+?)\s*:=", header_line)
-    if m === nothing
-        return nothing
-    end
-    
-    col_names = split(strip(m.captures[1]))
+function parse_dataframe(header_line::AbstractString, table::AbstractString)
+    lines = _lines(table)
+    col_names = split(strip(header_line))
     num_cols = length(col_names)
     
-    if num_cols == 0
-        return nothing
-    end
+    @assert num_cols > 0
     
     # Parse data rows to determine structure
     # First, scan to see if we have 1 or 2 indices
-    scan_i = i + 1
+    scan_i = 1
     sample_line = ""
     while scan_i <= length(lines)
         scan_line = strip(lines[scan_i])
@@ -248,18 +256,25 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int)
 
     # Determine number of indices by checking first data line
     num_indices = 1
+    all_ints = true
     if !isempty(sample_line)
         parts = split(sample_line)
         # If we have more parts than columns, check if first two are integers
         num_indices = length(parts) - num_cols
         for i in 1:num_indices
-            parse(Int, parts[i])
+            all_ints = all_ints && !isnothing(tryparse(Int, parts[i]))
         end
     end
 
     # Move i to start of data (after header line)
-    i += 1
-    cols = Any["index" => NTuple{num_indices,Int}[]]
+    i = 1
+    if all_ints
+        IndexType = NTuple{num_indices,Int}
+    else
+        @assert num_indices == 1
+        IndexType = String
+    end
+    cols = Any["index" => IndexType[]]
     for col in col_names
         push!(cols, col => Union{Float64,Missing}[])
     end
@@ -282,11 +297,16 @@ function parse_multi_column_table(lines::Vector{String}, start_idx::Int)
         end
         
         parts = split(line)
-        vals = Any[ntuple(i -> parse(Int, parts[i]), num_indices)]
+        index = if all_ints
+            ntuple(i -> parse(Int, parts[i]), num_indices)
+        else
+            parts[1]
+        end
+        vals = Any[index]
         
         for (col_idx, col_name) in enumerate(col_names)
             val_idx = num_indices + col_idx  # Skip first two parts (indices)
-            push!(vals, _parse(parts[val_idx]))
+            push!(vals, _maybe_parse(parts[val_idx]))
         end
 
         push!(df, vals)
@@ -311,6 +331,8 @@ function _axes(indices::Vector{NTuple{N,Int}}) where N
     end
 end
 
+_axes(i::Vector{String}) = (i,)
+
 function _container(vals::Array{Float64}, ::NTuple{N,Base.OneTo{Int}}) where {N}
     return vals
 end
@@ -328,7 +350,8 @@ function df_to_container!(data::Dict{String, Any}, df::DataFrames.DataFrame)
             continue
         end
         vals = df[!, col]
-        container = if any(ismissing, vals)
+        sz = length.(ax)
+        container = if length(vals) < prod(sz) || any(ismissing, vals)
             dict = OrderedCollections.OrderedDict{NTuple{length(ax),Int}, Float64}()
             for i in axes(df, 1)
                 if !ismissing(vals[i])
@@ -338,7 +361,7 @@ function df_to_container!(data::Dict{String, Any}, df::DataFrames.DataFrame)
             JuMP.Containers.SparseAxisArray(dict)
         else
             vals = convert(Vector{Float64}, vals)
-            _container(reshape(vals, length.(ax)), ax)
+            _container(reshape(vals, sz), ax)
         end
         data[col] = container
     end
@@ -352,8 +375,9 @@ end
 Parse indexed table format: param NAME [dims] : header := data ;
 Handles 1D, 2D, 3D+ arrays.
 """
-function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{String, Any})
-    i = start_idx
+function parse_indexed_table(text::AbstractString)
+    lines = _lines(text)
+    i = 1
     line = strip(lines[i])
     
     # Extract parameter name and dimensions
@@ -379,7 +403,7 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
         end
     else
         # Try to match param NAME [dims] on same line
-        m = match(r"param\s+(\w+)\s+(\[.*?\])", line)
+        m = match(r"(\w+)\s+(\[.*?\])", line)
         if m !== nothing
             param_name = string(m.captures[1])
             dims_pattern = string(m.captures[2])
@@ -414,21 +438,19 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
             parts = split(line)
             if length(parts) >= 2
                 idx = parse(Int, parts[1])
-                arr_data[idx] = _parse(parts[2])
+                arr_data[idx] = _maybe_parse(parts[2])
             end
             i += 1
         end
         # Convert to vector
-        if !isempty(arr_data)
-            max_idx = maximum(keys(arr_data))
-            result = Vector{Float64}(undef, max_idx)
-            fill!(result, NaN)
-            for (idx, val) in arr_data
-                result[idx] = val
-            end
-            data[param_name] = result
+        @assert !isempty(arr_data)
+        max_idx = maximum(keys(arr_data))
+        result = Vector{Float64}(undef, max_idx)
+        fill!(result, NaN)
+        for (idx, val) in arr_data
+            result[idx] = val
         end
-        return i
+        return param_name, result
     elseif num_dims == 2
         # 2D array: table format
         arr_data = Dict{Tuple{Int, Int}, Union{Float64, Missing}}()
@@ -447,38 +469,34 @@ function parse_indexed_table(lines::Vector{String}, start_idx::Int, data::Dict{S
             if length(parts) >= 3
                 idx1 = parse(Int, parts[1])
                 idx2 = parse(Int, parts[2])
-                arr_data[(idx1, idx2)] = _parse(parts[3])
+                arr_data[(idx1, idx2)] = _maybe_parse(parts[3])
             end
             i += 1
         end
         # Convert to 2D array
-        if !isempty(arr_data)
-            max_idx1 = maximum([k[1] for k in keys(arr_data)])
-            max_idx2 = maximum([k[2] for k in keys(arr_data)])
-            result = Matrix{Union{Float64, Missing}}(undef, max_idx1, max_idx2)
-            fill!(result, NaN)
-            for ((idx1, idx2), val) in arr_data
-                result[idx1, idx2] = val
-            end
-            data[param_name] = result
+        @assert !isempty(arr_data)
+        max_idx1 = maximum([k[1] for k in keys(arr_data)])
+        max_idx2 = maximum([k[2] for k in keys(arr_data)])
+        result = Matrix{Union{Float64, Missing}}(undef, max_idx1, max_idx2)
+        fill!(result, NaN)
+        for ((idx1, idx2), val) in arr_data
+            result[idx1, idx2] = val
         end
-        return i
+        return param_name, result
     else
         # 3D+ array: handle slice-by-slice
-        return parse_multi_dimensional_array(lines, i, data, param_name, num_dims)
+        return param_name, parse_multi_dimensional_array(lines, i, num_dims)
     end
 end
 
 """
-    parse_multi_dimensional_array(lines, start_idx, data, param_name, num_dims) -> Int
+    parse_multi_dimensional_array(lines, start_idx, param_name, num_dims) -> Int
 
 Parse multi-dimensional arrays (3D+) that are stored slice-by-slice in AMPL format.
 """
 function parse_multi_dimensional_array(
-    lines::Vector{String}, 
+    lines::Vector{<:AbstractString}, 
     start_idx::Int, 
-    data::Dict{String, Any}, 
-    param_name::String,
     num_dims::Int
 )
     i = start_idx
@@ -534,7 +552,7 @@ function parse_multi_dimensional_array(
                 for (w_idx, val_str) in enumerate(parts[2:end])
                     # For 3D: E[s, w, h]
                     indices = [idx1, w_idx, h_idx]
-                    arr_data[indices] = _parse(val_str)
+                    arr_data[indices] = _maybe_parse(val_str)
                     dim_sizes[2] = max(dim_sizes[2], w_idx)
                 end
             catch
@@ -561,12 +579,12 @@ function parse_multi_dimensional_array(
                     result[indices[1], indices[2], indices[3]] = val
                 end
             end
-            data[param_name] = result
         else
             # For 4D+, store as nested structure or use a more complex representation
             # For now, store as Dict mapping indices to values
-            data[param_name] = arr_data
+            result = arr_data
         end
+        return result
     end
     
     return i
